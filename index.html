@@ -166,6 +166,12 @@ select{max-width:190px}
 .chip:hover{background:var(--surface-3)}
 .chip[aria-pressed="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
 .spacer{flex:1 1 auto}
+.dlbtn{border:1px solid var(--line-2);border-radius:6px;padding:6px 11px;font-size:12px;
+  font-weight:500;color:var(--ink-2);background:var(--surface-2);white-space:nowrap}
+.dlbtn:hover{background:var(--surface-3);color:var(--ink);border-color:var(--ink-3)}
+.dlbtn[disabled]{opacity:.6;cursor:default}
+.dlbtn[data-state="ok"]{color:var(--r-block);border-color:var(--r-block)}
+.dlbtn[data-state="err"]{color:var(--r-dis);border-color:var(--r-dis)}
 .count{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
 .linkbtn{font-size:12px;color:var(--accent);text-decoration:underline;text-underline-offset:2px}
 
@@ -332,6 +338,7 @@ footer b{color:var(--ink-2);font-weight:600}
     <button class="chip" id="fwatch" type="button" aria-pressed="false">&#9733; Watchlist</button>
     <div class="spacer"></div>
     <span class="count" id="count"></span>
+    <button class="dlbtn" id="dl" type="button">Download CSV</button>
     <button class="linkbtn" id="reset" type="button">Reset</button>
   </div>
 
@@ -823,6 +830,103 @@ document.getElementById("tbody").addEventListener("click",function(e){
     saveWatch(); render(); return; }
   var tr=e.target.closest("tr"); if(!tr) return;
   openDrawer(ROWS[+tr.dataset.i]);
+});
+
+/* ---------- CSV export of the current view ---------- */
+// [header, key] \u2014 plain keys read the payload; functions derive a label
+var CSVCOLS=[
+ ["Name","name"],["NSE Code","nse"],
+ ["Sector",function(r){ return SEC[g(r,"sec")]||""; }],
+ ["Industry",function(r){ return IND[g(r,"ind")]||""; }],
+ ["Rating",function(r){ return RAT[g(r,"rat")]; }],
+ ["Result score","score"],
+ ["Quality score","qual"],["Quality band",function(r){ return qualBand(g(r,"qual")); }],
+ ["Valuation score","val"],["Valuation band",function(r){ return valBand(g(r,"val")); }],
+ ["Shareholding score","own"],["Shareholding band",ownBand],
+ ["Vs trend","surp"],["Vs trend band",surpBand],
+ ["Price reaction",pxBand],
+ ["Reported this quarter",function(r){ return g(r,"rep")===1?"Yes":"No"; }],
+ ["Latest result",function(r){ return qtr(g(r,"lastres")); }],
+ ["One-off driven",function(r){ return g(r,"oneoff")===1?"Yes":"No"; }],
+ ["SME listing",function(r){ return g(r,"sme")===1?"Yes":"No"; }],
+ ["Stretched receivables",function(r){ return g(r,"ddflag")===1?"Yes":"No"; }],
+ ["Market cap (cr)","mcap"],["Price","px"],["PE","pe"],["Industry PE","ipe"],
+ ["5yr median PE","hpe"],["Price to book","pbv"],["Dividend yield %","dy"],
+ ["3-month return %","r3m"],["1-year return %","r1y"],
+ ["Revenue YoY %","gs"],["Revenue QoQ %","gsQ"],["Op profit YoY %","gop"],
+ ["Net profit YoY %","gnp"],["Net profit QoQ %","gnpQ"],["Core profit YoY %","gcore"],
+ ["OPM %","opm"],["OPM year ago %","opmY"],["OPM prev qtr %","opmQ"],
+ ["Margin change YoY pp","dOpmY"],["Margin change QoQ pp","dOpmQ"],["NPM %","npm"],
+ ["Revenue (cr)","sales"],["Revenue prev qtr","salesQ"],["Revenue year ago","salesY"],
+ ["Op profit (cr)","op"],["Op profit prev qtr","opQ"],["Op profit year ago","opY"],
+ ["Net profit (cr)","np"],["Net profit prev qtr","npQ"],["Net profit year ago","npY"],
+ ["Core profit (cr)","core"],["Exceptional items (cr)","xo"],["Other income (cr)","oi"],
+ ["PBT (cr)","pbt"],["Tax (cr)","tax"],["Effective tax rate %","taxrate"],
+ ["Interest (cr)","intr"],["Depreciation (cr)","dep"],["Interest cover x","intcover"],
+ ["Expected revenue","eS"],["Expected op profit","eO"],["Expected net profit","eN"],
+ ["Revenue vs trend %","spS"],["Op profit vs trend %","spO"],["Net profit vs trend %","spN"],
+ ["ROCE %","roce"],["ROCE year ago %","roceY"],["ROCE change pp","dRoce"],
+ ["ROE %","roe"],["ROA %","roa"],["Debt to equity","de"],["Piotroski","pio"],
+ ["Debtor days","ddays"],["Debtor days vs sector x","ddRel"],["Working capital days","wcdays"],
+ ["Promoter %","prom"],["Pledged %","pledge"],["FII %","fii"],["DII %","dii"],
+ ["Public %","pub"],["Promoter change pp","dprom"],["FII change pp","dfii"],
+ ["DII change pp","ddii"],["Institutional net change pp","dinst"],
+ ["Debt (cr)","debt"],["Cash (cr)","cash"],["EPS","eps"],["3yr profit CAGR %","g3p"]
+];
+function csvCell(v){
+  if(v==null) return "";
+  var s=String(v);
+  return /[",\n\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+}
+function buildCSV(rows){
+  var out=[CSVCOLS.map(function(c){ return csvCell(c[0]); }).join(",")];
+  rows.forEach(function(r){
+    out.push(CSVCOLS.map(function(c){
+      var k=c[1];
+      return csvCell(typeof k==="function" ? k(r) : g(r,k));
+    }).join(","));
+  });
+  return out.join("\r\n")+"\r\n";
+}
+function csvName(){
+  var c=P.latest, m={3:"mar",6:"jun",9:"sep",12:"dec"}[c%100]||("m"+(c%100));
+  return "results-scorecard-"+m+"-"+Math.floor(c/100)+".csv";
+}
+var dlbtn=document.getElementById("dl");
+function dlState(txt,state,revert){
+  dlbtn.textContent=txt;
+  if(state) dlbtn.setAttribute("data-state",state); else dlbtn.removeAttribute("data-state");
+  if(revert) setTimeout(function(){ dlbtn.textContent="Download CSV";
+    dlbtn.removeAttribute("data-state"); dlbtn.disabled=false; },2600);
+}
+dlbtn.addEventListener("click",function(){
+  if(!view.length){ dlState("Nothing to export",null,true); return; }
+  dlbtn.disabled=true; dlState("Preparing\u2026");
+  var text=buildCSV(view), name=csvName();
+  // the Artifact sandbox blocks page-initiated downloads, so ask the host to save;
+  // on an ordinary web host window.claude is absent and the anchor path runs
+  var viaHost = (window.claude && typeof claude.use==="function")
+    ? claude.use("downloads") : Promise.resolve(null);
+  viaHost.then(function(dl){
+    if(!dl) throw {code:"no_capability"};
+    return dl.save({filename:name, data:text}).then(function(){
+      dlState("Saved \u2713","ok",true);
+    });
+  }).catch(function(err){
+    var code=err&&err.code;
+    if(code==="declined"){ dlState("Cancelled",null,true); return; }
+    if(code&&code!=="no_capability"&&code!=="unavailable"&&code!=="not_granted"){
+      dlState("Could not save","err",true); return;
+    }
+    try{
+      var url=URL.createObjectURL(new Blob([text],{type:"text/csv;charset=utf-8"}));
+      var a=document.createElement("a");
+      a.href=url; a.download=name; document.body.appendChild(a); a.click();
+      document.body.removeChild(a);
+      setTimeout(function(){ URL.revokeObjectURL(url); },4000);
+      dlState("Saved \u2713","ok",true);
+    }catch(e){ dlState("Could not save","err",true); }
+  });
 });
 
 /* ---------- drawer ---------- */
